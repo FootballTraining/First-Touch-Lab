@@ -317,6 +317,7 @@ export function removeDemo(s: Store): Store {
     sessions: s.sessions.filter((x) => !x.demo),
     results: s.results.filter((x) => !x.demo),
     challenges: s.challenges.filter((x) => !x.demo),
+    schedulingDraft: s.schedulingDraft?.demo ? null : s.schedulingDraft,
   };
 }
 

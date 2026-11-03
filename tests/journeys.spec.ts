@@ -19,8 +19,6 @@ test("training journey, skill tests, challenges, favorites and backup roundtrip"
     path: "tests/dashboard-desktop.png",
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Start fresh" }).click();
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect(page.getByText("DEMO WORKSPACE")).toHaveCount(0);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Nickname").fill("Alex");
@@ -263,7 +261,9 @@ test("deletion, challenge completion and timed comparisons use stored records", 
     .getByRole("button", { name: "Progress Tracker", exact: true })
     .click();
   await page.getByRole("button", { name: "Delete Dribbling" }).first().click();
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Delete Session", exact: true })
+    .click();
   await expect(
     page
       .locator(".stat-card")

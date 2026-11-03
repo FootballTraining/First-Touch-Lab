@@ -50,7 +50,6 @@ import {
   id,
   offsetDate,
   removeDemo,
-  seed,
   stats,
   tests,
   validStore,
@@ -90,10 +89,10 @@ let loadWarning = "";
 function initial(): Store {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return seed();
+    if (!raw) return emptyStore();
     const s: unknown = JSON.parse(raw);
     const restored = readStore(s);
-    if (restored) return restored;
+    if (restored) return removeDemo(restored);
     loadWarning =
       "Your saved data could not be read. An empty workspace is open. You can restore a JSON backup in Settings.";
     return emptyStore();
@@ -117,6 +116,8 @@ function App() {
   const [detail, setDetail] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{
     text: string;
+    title?: string;
+    confirmLabel?: string;
     action: () => void;
   } | null>(null);
   const previousCompleted = useRef(
@@ -215,7 +216,9 @@ function App() {
   }
   function eraseSession(s: Session) {
     setConfirm({
-      text: "Delete this training session? This cannot be undone.",
+      title: "Delete Training Session?",
+      text: "Are you sure you want to delete this training session? This action cannot be undone.",
+      confirmLabel: "Delete Session",
       action: () =>
         update((d) => ({
           ...d,
@@ -224,8 +227,6 @@ function App() {
     });
   }
   const st = stats(data);
-  const hasDemo =
-    data.sessions.some((s) => s.demo) || data.results.some((r) => r.demo);
   const planButton = (
     <button className="button dark" onClick={() => openSession()}>
       <Plus size={17} /> Plan a session
@@ -383,24 +384,6 @@ function App() {
               </div>
             </header>
             <main>
-              {hasDemo && (
-                <div className="demo-banner">
-                  <span>
-                    <span className="demo-pill">DEMO WORKSPACE</span> A little
-                    inspiration to get you started. Sample entries are labeled.
-                  </span>
-                  <button
-                    onClick={() =>
-                      setConfirm({
-                        text: "Remove all sample sessions, test results, and demo challenges? Your own entries and settings will stay.",
-                        action: () => update(removeDemo),
-                      })
-                    }
-                  >
-                    Start fresh <ArrowRight size={14} />
-                  </button>
-                </div>
-              )}
               <div className="page-heading">
                 <div>
                   <div className="eyebrow">
@@ -710,6 +693,7 @@ function App() {
                     setSession((s) => (s ? { ...s, date } : s));
                   }}
                   complete={complete}
+                  erase={eraseSession}
                 />
               )}
               {page === "Progress Tracker" && (
@@ -938,7 +922,10 @@ function App() {
         </Modal>
       )}
       {confirm && (
-        <Modal title="Just checking" close={() => setConfirm(null)}>
+        <Modal
+          title={confirm.title ?? "Just checking"}
+          close={() => setConfirm(null)}
+        >
           <p>{confirm.text}</p>
           <div className="modal-actions">
             <button
@@ -954,7 +941,7 @@ function App() {
                 setConfirm(null);
               }}
             >
-              Confirm
+              {confirm.confirmLabel ?? "Confirm"}
             </button>
           </div>
         </Modal>
@@ -1442,11 +1429,13 @@ function Planner({
   open,
   add,
   complete,
+  erase,
 }: {
   data: Store;
   open: (s: Session) => void;
   add: (date: string) => void;
   complete: (s: Session) => void;
+  erase: (s: Session) => void;
 }) {
   const [week, setWeek] = useState(0);
   const start = weekStart(new Date(offsetDate(week * 7) + "T12:00"));
@@ -1515,6 +1504,16 @@ function Planner({
                           {s.completed ? s.actual : s.duration} minutes
                         </span>
                         <span>{s.completed ? "✓ Completed" : "Planned"}</span>
+                      </button>
+                      <button
+                        className="icon-button calendar-delete"
+                        title="Delete training session"
+                        aria-label={
+                          "Delete " + (drillById(s.drillId)?.name ?? s.focus)
+                        }
+                        onClick={() => erase(s)}
+                      >
+                        <Trash2 size={16} />
                       </button>
                       {!s.completed && (
                         <button
@@ -1840,7 +1839,7 @@ function SettingsPage({
       ask({
         text: "Replace your current workspace with this backup? Export your current data first if you want to keep it.",
         action: () => {
-          update(() => parsed);
+          update(() => removeDemo(parsed));
           setP(parsed.preferences);
           notify("Backup restored. Welcome back.");
         },
@@ -1851,8 +1850,6 @@ function SettingsPage({
       if (input.current) input.current.value = "";
     }
   }
-  const demo =
-    data.sessions.some((s) => s.demo) || data.results.some((s) => s.demo);
   return (
     <div className="settings-grid">
       <section className="card">
@@ -1955,38 +1952,6 @@ function SettingsPage({
               onChange={(e) => void importData(e.target.files?.[0])}
             />
           </div>
-          <hr />
-          <h3>Sample data</h3>
-          <p className="muted">
-            Sample entries are labeled Demo. Removing them keeps your personal
-            entries.
-          </p>
-          <button
-            className="button secondary"
-            onClick={() =>
-              demo
-                ? ask({
-                    text: "Remove all demo entries? Your own training and preferences will stay.",
-                    action: () => update(removeDemo),
-                  })
-                : update((s) => {
-                    const example = seed();
-                    return {
-                      ...s,
-                      sessions: [...s.sessions, ...example.sessions],
-                      results: [...s.results, ...example.results],
-                      challenges: [
-                        ...s.challenges,
-                        ...example.challenges.filter(
-                          (c) => !s.challenges.some((a) => a.id === c.id),
-                        ),
-                      ],
-                    };
-                  })
-            }
-          >
-            {demo ? "Remove sample data" : "Enable sample data"}
-          </button>
           <hr />
           <button
             className="text-button danger-text"
@@ -2244,8 +2209,8 @@ function Landing({ go }: { go: (p: Page) => void }) {
                 "It is stored locally in your browser, with no trackers or external data transmission. Clearing storage may delete it. Settings lets you export, import, or reset your data.",
               ],
               [
-                "Can I try it without entering data?",
-                "Yes. The dashboard starts with clearly labeled demo entries. Remove them any time in Settings or with Start fresh.",
+                "What will I see when I start?",
+                "Your workspace starts empty. Log training, record skill tests, or schedule a drill to build your own progress.",
               ],
             ].map(([q, a]) => (
               <details key={q}>

@@ -1353,12 +1353,13 @@ hr {
   padding: 7px;
 }
 .calendar-session {
+  position: relative;
   border: 1px solid #d8e9cf;
   border-left: 3px solid #5bb846;
   border-radius: 5px;
   background: #f1f7ec;
   margin-bottom: 8px;
-  padding: 8px 6px;
+  padding: 8px 6px 52px;
 }
 .calendar-session > button:first-child {
   text-align: left;
@@ -1367,6 +1368,13 @@ hr {
   gap: 8px;
   width: 100%;
   padding: 0;
+}
+.calendar-session > .calendar-delete {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 44px;
+  min-height: 44px;
 }
 .calendar-session small {
   font-size: 8px;

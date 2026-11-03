@@ -14,8 +14,6 @@ async function enter(page: any) {
     .getByRole("button", { name: "Start Training — Free" })
     .first()
     .click();
-  await page.getByRole("button", { name: "Start fresh", exact: true }).click();
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
 }
 const card = (page: any, name: string) =>
   page
