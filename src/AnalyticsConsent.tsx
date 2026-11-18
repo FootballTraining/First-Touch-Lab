@@ -116,10 +116,10 @@ export function AnalyticsPrivacy({
         If you accept on the First Touch Lab website, Google Analytics 4
         measures visits, engagement and use of the training tools. It receives
         the site address and title, basic browser and device information,
-        approximate region, and events with catalog details such as drill
-        category and player count. Google Analytics uses cookies with a browser
-        identifier to count returning browsers. Advertising and remarketing are
-        disabled.
+        approximate region, approved campaign labels from tagged links, and
+        events with catalog details such as drill category and player count.
+        Google Analytics uses cookies with a browser identifier to count
+        returning browsers. Advertising and remarketing are disabled.
       </p>
       <p>
         This browser remembers your choice separately from your training data.

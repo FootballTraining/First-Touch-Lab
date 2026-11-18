@@ -70,6 +70,16 @@ async function servePages(context: BrowserContext, blocked = false) {
   return { hits, googleRequests, frames };
 }
 
+function tagCommands(page: Page) {
+  return page
+    .frame({ url: site + "analytics.html" })!
+    .evaluate(() =>
+      (window as unknown as { dataLayer: IArguments[] }).dataLayer.map(
+        (entry) => Array.from(entry),
+      ),
+    );
+}
+
 async function openDrill(page: Page) {
   await page
     .locator(".drill-card")
@@ -86,7 +96,12 @@ test("mobile first visit and remembered rejection make no analytics requests", a
 }) => {
   const { googleRequests, frames } = await servePages(context);
   await page.setViewportSize({ width: 320, height: 720 });
-  await page.goto(site + "?search=" + privateText + "#%E0");
+  await page.goto(
+    site +
+      "?utm_source=facebook&utm_medium=social&utm_campaign=launch&search=" +
+      privateText +
+      "#%E0",
+  );
   const banner = page.getByRole("region", { name: "Optional analytics" });
   const accept = banner.getByRole("button", { name: "Accept Analytics" });
   const reject = banner.getByRole("button", { name: "Reject Analytics" });
@@ -125,6 +140,99 @@ test("mobile first visit and remembered rejection make no analytics requests", a
   expect(googleRequests).toEqual([]);
 });
 
+const campaignCases = [
+  {
+    name: "Instagram",
+    query: "utm_source=instagram&utm_medium=social&utm_campaign=launch",
+    config: {
+      campaign_source: "instagram",
+      campaign_medium: "social",
+      campaign_name: "launch",
+    },
+    landing: {
+      landing_source: "instagram",
+      landing_medium: "social",
+      landing_campaign: "launch",
+    },
+  },
+  {
+    name: "Facebook",
+    query: "utm_source=facebook&utm_medium=social&utm_campaign=launch",
+    config: {
+      campaign_source: "facebook",
+      campaign_medium: "social",
+      campaign_name: "launch",
+    },
+    landing: {
+      landing_source: "facebook",
+      landing_medium: "social",
+      landing_campaign: "launch",
+    },
+  },
+  {
+    name: "newsletter with an unapproved campaign",
+    query: "utm_source=newsletter&utm_medium=email&utm_campaign=" + privateText,
+    config: { campaign_source: "newsletter", campaign_medium: "email" },
+    landing: { landing_source: "newsletter", landing_medium: "email" },
+  },
+  {
+    name: "unknown values and repeated parameters",
+    query:
+      "utm_source=Instagram&utm_medium=social&utm_medium=social&utm_campaign=unknown",
+    config: {},
+    landing: {},
+  },
+];
+
+for (const { name, query, config, landing } of campaignCases) {
+  test(`campaign attribution filters and reports ${name} only after consent`, async ({
+    context,
+    page,
+  }) => {
+    const { hits, googleRequests, frames } = await servePages(context);
+    const ignored = new URLSearchParams({
+      campaign_source: "facebook",
+      fbclid: privateText,
+      gclid: privateText,
+      utm_content: "launch",
+      utm_term: privateText,
+      UTM_CAMPAIGN: "drill_library",
+    });
+    await page.goto(site + "?" + query + "&" + ignored + "#" + privateText, {
+      referer: "https://example.invalid/referrer?email=" + privateText,
+    });
+    const accept = page.getByRole("button", { name: "Accept Analytics" });
+    await expect(accept).toBeVisible();
+    expect(googleRequests).toEqual([]);
+    expect(frames).toEqual([]);
+
+    await accept.click();
+    await expect
+      .poll(() => hits)
+      .toEqual([
+        { name: "page_view", params: { ...landing, send_to: "G-Y346K46JT1" } },
+      ]);
+    const commands = await tagCommands(page);
+    const tagConfig = commands.find(([command]) => command === "config")![2];
+    expect(
+      Object.fromEntries(
+        Object.entries(tagConfig).filter(([key]) =>
+          key.startsWith("campaign_"),
+        ),
+      ),
+    ).toEqual(config);
+    expect(commands).toContainEqual([
+      "set",
+      expect.objectContaining({ page_location: site, page_referrer: "" }),
+    ]);
+    expect(frames).toEqual([""]);
+    expect(googleRequests).toEqual([tagUrl, collectUrl]);
+    expect(JSON.stringify(commands)).not.toMatch(
+      /private-value|utm_|fbclid|gclid|example\.invalid/,
+    );
+  });
+}
+
 test("accepted analytics sends each expected event and withdrawal stops collection", async ({
   context,
   page,
@@ -150,11 +258,7 @@ test("accepted analytics sends each expected event and withdrawal stops collecti
       forms: document.forms.length,
     })),
   ).toEqual({ title: "First Touch Lab", referrer: "", forms: 0 });
-  const commands = await frame.evaluate(() =>
-    (window as unknown as { dataLayer: IArguments[] }).dataLayer.map((entry) =>
-      Array.from(entry),
-    ),
-  );
+  const commands = await tagCommands(page);
   expect(commands[0]).toEqual([
     "consent",
     "default",

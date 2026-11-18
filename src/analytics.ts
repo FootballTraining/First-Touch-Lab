@@ -13,6 +13,36 @@ export const analyticsAvailable =
   [cookiePath, `${cookiePath}index.html`].includes(location.pathname);
 export type Consent = "accepted" | "rejected" | null;
 
+const campaignFields = [
+  {
+    query: "utm_source",
+    config: "campaign_source",
+    event: "landing_source",
+    values: [
+      "instagram",
+      "facebook",
+      "tiktok",
+      "youtube",
+      "linkedin",
+      "newsletter",
+      "partner",
+      "qr",
+    ],
+  },
+  {
+    query: "utm_medium",
+    config: "campaign_medium",
+    event: "landing_medium",
+    values: ["social", "video", "email", "referral", "offline"],
+  },
+  {
+    query: "utm_campaign",
+    config: "campaign_name",
+    event: "landing_campaign",
+    values: ["launch", "drill_library", "training_planner", "weekly_training"],
+  },
+] as const;
+
 export const featureNames = {
   Dashboard: "dashboard",
   "Training Planner": "training_planner",
@@ -61,9 +91,25 @@ export function saveConsent(consent: Exclude<Consent, null>) {
   }
 }
 
+function readCampaignAttribution() {
+  const query = new URLSearchParams(location.search);
+  const config: Record<string, string> = {};
+  const landing: Record<string, string> = {};
+  for (const field of campaignFields) {
+    const candidates = query.getAll(field.query);
+    if (candidates.length !== 1) continue;
+    const approved = field.values.find((value) => value === candidates[0]);
+    if (approved === undefined) continue;
+    config[field.config] = approved;
+    landing[field.event] = approved;
+  }
+  return { config, landing };
+}
+
 export function startAnalytics() {
   if (!analyticsAvailable || frame) return;
 
+  const campaign = readCampaignAttribution();
   // Isolate Google automatic detection from the app's URL, DOM and forms.
   const iframe = document.createElement("iframe");
   iframe.hidden = true;
@@ -108,6 +154,7 @@ export function startAnalytics() {
     });
     gtag("js", new Date());
     gtag("config", measurementId, {
+      ...campaign.config,
       send_page_view: false,
       allow_google_signals: false,
       allow_ad_personalization_signals: false,
@@ -123,7 +170,10 @@ export function startAnalytics() {
     script.src = `https://www.googletagmanager.com/gtag/js?id=${measurementId}`;
     script.addEventListener("load", () => {
       if (frame !== iframe) return;
-      gtag("event", "page_view", { send_to: measurementId });
+      gtag("event", "page_view", {
+        ...campaign.landing,
+        send_to: measurementId,
+      });
       send = ({ name, params }) =>
         gtag("event", name, { ...params, send_to: measurementId });
       pending.splice(0).forEach(send);

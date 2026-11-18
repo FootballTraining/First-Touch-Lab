@@ -89,15 +89,31 @@ The official GitHub Pages URL uses direct `gtag.js` with Basic Consent Mode and 
 
 Player count is the catalog's total, including any goalkeeper. Test and challenge IDs are one-based catalog indexes. A feature can be counted again after navigating away and returning. Refreshing, restoring backups, resetting data, opening an unsaved form, and saving an unchanged completed log produce no training completion events. A challenge that drops below its threshold and earns completion again counts as another completion.
 
-The tag runs in a blank same-origin document, so its automatic detection runs outside the training interface. It receives a fixed site URL and page title, with referrer reporting disabled. Browser queries, hashes, referrers, user IDs, workspace records, dates, notes, and scores are excluded from event parameters. Standard GA4 measurement still uses its own cookie-based browser identifier and may include device, browser, and approximate region data. Returning-user counts reflect opted-in browsers that retain these cookies. Referral and URL campaign attribution are intentionally omitted.
+The tag runs in a blank same-origin document, so its automatic detection runs outside the training interface. It receives a fixed site URL and page title, with referrer reporting disabled. Raw query strings, hashes, referrer URLs, click IDs, user IDs, workspace records, dates, notes, and scores are excluded from analytics. Standard GA4 measurement uses its own cookie-based browser identifier and may include device, browser, and approximate region data. Returning-user counts reflect opted-in browsers that retain these cookies.
+
+### Campaign links
+
+After analytics consent, the site checks the landing URL for these exact, case-sensitive names and values. Each field is checked independently. A missing field, a repeated parameter name, or an unapproved value leaves that field unset. Campaign labels are read from the current URL and are kept out of workspace storage and backups.
+
+| URL parameter  | Approved values                                                                         | GA4 configuration | Custom parameter on `page_view` |
+| -------------- | --------------------------------------------------------------------------------------- | ----------------- | ------------------------------- |
+| `utm_source`   | `instagram`, `facebook`, `tiktok`, `youtube`, `linkedin`, `newsletter`, `partner`, `qr` | `campaign_source` | `landing_source`                |
+| `utm_medium`   | `social`, `video`, `email`, `referral`, `offline`                                       | `campaign_medium` | `landing_medium`                |
+| `utm_campaign` | `launch`, `drill_library`, `training_planner`, `weekly_training`                        | `campaign_name`   | `landing_campaign`              |
+
+- [Instagram launch link](https://footballtraining.github.io/First-Touch-Lab/?utm_source=instagram&utm_medium=social&utm_campaign=launch)
+- [Facebook launch link](https://footballtraining.github.io/First-Touch-Lab/?utm_source=facebook&utm_medium=social&utm_campaign=launch)
+
+For other channels, use combinations such as `newsletter / email`, `youtube / video`, `partner / referral`, and `qr / offline`. Extend the fixed values in `src/analytics.ts` and document them here before publishing a link with a new label. A visit without an approved source tag cannot be identified as Instagram or Facebook by this integration. Platforms that strip UTMs also lose that attribution.
 
 ### GA4 configuration before release
 
 1. In **Admin → Data streams**, open the stream for `G-Y346K46JT1` and turn off **Enhanced measurement**. Manual page views and app events already cover the intended interactions. In **Configure tag settings**, turn off automatic event detection and user-provided data collection for this tag. Keep Google signals, ads personalization, and any Google Ads or additional tag destinations disabled. [Enhanced measurement](https://support.google.com/analytics/answer/9216061) · [Google tag settings](https://support.google.com/analytics/answer/12131703)
-2. Under **Admin → Custom definitions**, add event-scoped dimensions for `feature_name`, `drill_id`, `drill_category`, `player_count`, `test_id`, and `challenge_id` if you want to break down reports by those fields. [Custom dimensions and metrics](https://support.google.com/analytics/answer/14240153)
-3. On the official URL after release, use a fresh browser profile and check DevTools Network for no Google requests on first load and after rejection. Accept, exercise the flows above, and verify events in **Realtime** or **DebugView** with Tag Assistant. Withdraw in Settings and repeat the actions to confirm collection stops. Review traffic and returning users in the standard acquisition and retention reports. [DebugView](https://support.google.com/analytics/answer/7201382)
+2. In **Reports → Acquisition → Traffic acquisition**, use the built-in **Session source / medium** and **Session campaign** dimensions to compare acquisition channels. A tagged landing during an existing session can have different labels from that session's acquisition dimensions. [Traffic-source dimensions](https://support.google.com/analytics/answer/11242870) · [GA4 configuration fields](https://developers.google.com/analytics/devguides/collection/ga4/reference/config)
+3. In **Admin → Custom definitions**, register event-scoped dimensions **Landing source** (`landing_source`), **Landing medium** (`landing_medium`), and **Landing campaign** (`landing_campaign`) for tagged page-view reporting. In an Exploration, filter **Event name** to `page_view` and use **Event count** to compare arrivals by those dimensions. Also register `feature_name`, `drill_id`, `drill_category`, `player_count`, `test_id`, and `challenge_id` for breakdowns of the training events. [Event-scoped custom dimensions](https://support.google.com/analytics/answer/14239696)
+4. After release, open each example link in a separate fresh browser profile. Check DevTools Network for zero Google requests before consent and after rejection. After acceptance, verify `page_view` and its approved landing labels in **Realtime** or **DebugView** with Tag Assistant. Try a fictional unapproved UTM value and confirm the corresponding label is absent. In Settings, withdraw consent and confirm collection stops. [DebugView](https://support.google.com/analytics/answer/7201382)
 
-The automated browser tests serve the built site at the official URL via interception and substitute a local tag fixture. They check consent, outgoing event payloads, and blocked-tag behavior without sending test traffic to the GA4 property. Live GA4 delivery and dashboard settings require checking the deployed stream.
+The automated browser tests serve the built site at the official URL via interception and substitute a local tag fixture. They check consent, campaign filtering, outgoing event payloads, and blocked-tag behavior without sending test traffic to the GA4 property. Live GA4 delivery and dashboard settings require checking the deployed stream.
 
 ## Checks
 
