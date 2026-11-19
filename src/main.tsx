@@ -66,6 +66,13 @@ import {
   SavedDrills,
   roster,
 } from "./DrillFeatures";
+import { analyticsAvailable, track } from "./analytics";
+import type { AnalyticsEvent } from "./analytics";
+import {
+  AnalyticsBanner,
+  AnalyticsPrivacy,
+  useAnalyticsConsent,
+} from "./AnalyticsConsent";
 import "./style.css";
 const KEY = "first-touch-lab-v1";
 const pages = [
@@ -86,6 +93,14 @@ const icons = [
   Settings,
 ];
 let loadWarning = "";
+function pageFromHash(): Page | undefined {
+  try {
+    const name = decodeURIComponent(location.hash.slice(1));
+    return ([...pages, "Home"] as const).find((page) => page === name);
+  } catch {
+    return undefined;
+  }
+}
 function initial(): Store {
   try {
     const raw = localStorage.getItem(KEY);
@@ -104,10 +119,22 @@ function initial(): Store {
 }
 function App() {
   const [data, setData] = useState(initial);
-  const [page, setPage] = useState<Page>(() => {
-    const p = decodeURIComponent(location.hash.slice(1));
-    return [...pages, "Home"].includes(p) ? (p as Page) : "Home";
-  });
+  const [page, setPage] = useState<Page>(() => pageFromHash() ?? "Home");
+  const analytics = useAnalyticsConsent();
+  const lastFeature = useRef<Page | null>(null);
+  useEffect(() => {
+    const feature =
+      analytics.consent === "accepted" && page !== "Home" ? page : null;
+    if (feature && feature !== lastFeature.current)
+      track({ name: "feature_view", feature });
+    lastFeature.current = feature;
+  }, [analytics.consent, page]);
+  const analyticsBanner =
+    analyticsAvailable &&
+    (analytics.consent === null ||
+      analytics.status === "rejected-unverified") ? (
+      <AnalyticsBanner {...analytics} />
+    ) : null;
   const [notice, setNotice] = useState(loadWarning);
   const [mobile, setMobile] = useState(false);
   const [session, setSession] = useState<Session | null>(data.schedulingDraft);
@@ -148,8 +175,8 @@ function App() {
   }, [data]);
   useEffect(() => {
     const change = () => {
-      const p = decodeURIComponent(location.hash.slice(1));
-      if ([...pages, "Home"].includes(p)) setPage(p as Page);
+      const p = pageFromHash();
+      if (p) setPage(p);
     };
     window.addEventListener("hashchange", change);
     return () => window.removeEventListener("hashchange", change);
@@ -162,6 +189,33 @@ function App() {
   }
   function update(fn: (s: Store) => Store) {
     setData(fn);
+  }
+  function updateTraining(
+    fn: (s: Store) => Store,
+    events: AnalyticsEvent[] = [],
+  ) {
+    update(fn);
+    if (analytics.consent !== "accepted") return;
+    events.forEach(track);
+
+    // Only training actions can produce a completion event. Loading or
+    // restoring a workspace with completed challenges does not count.
+    const next = fn(data);
+    for (const { id, demo } of next.challenges) {
+      const target = challenges[id].target;
+      if (
+        !demo &&
+        challengeProgress(data, id) < target &&
+        challengeProgress(next, id) >= target
+      ) {
+        track({ name: "challenge_completed", challenge: id });
+      }
+    }
+  }
+  function showDrill(drillId: string) {
+    if (detail === drillId) return;
+    setDetail(drillId);
+    track({ name: "drill_view", drillId });
   }
   function openSession(
     completed = false,
@@ -220,10 +274,10 @@ function App() {
       text: "Are you sure you want to delete this training session? This action cannot be undone.",
       confirmLabel: "Delete Session",
       action: () =>
-        update((d) => ({
-          ...d,
-          sessions: d.sessions.filter((x) => x.id !== s.id),
-        })),
+        updateTraining(
+          (d) => ({ ...d, sessions: d.sessions.filter((x) => x.id !== s.id) }),
+          s.completed ? [{ name: "progress_updated" }] : [],
+        ),
     });
   }
   const st = stats(data);
@@ -297,7 +351,7 @@ function App() {
   return (
     <>
       {page === "Home" ? (
-        <Landing go={go} />
+        <Landing go={go} analyticsBanner={analyticsBanner} />
       ) : (
         <div className="app-shell">
           <aside className={mobile ? "sidebar open" : "sidebar"}>
@@ -384,6 +438,7 @@ function App() {
               </div>
             </header>
             <main>
+              {analyticsBanner}
               <div className="page-heading">
                 <div>
                   <div className="eyebrow">
@@ -472,7 +527,7 @@ function App() {
                     <div className="dashboard-primary">
                       <SavedDrills
                         data={data}
-                        show={setDetail}
+                        show={showDrill}
                         schedule={scheduleDrill}
                         select={(id) => update((d) => addSavedDrill(d, id))}
                         remove={(drillId) =>
@@ -699,7 +754,15 @@ function App() {
               {page === "Progress Tracker" && (
                 <ProgressPage
                   data={data}
-                  update={update}
+                  deleteResult={(resultId) =>
+                    updateTraining(
+                      (s) => ({
+                        ...s,
+                        results: s.results.filter((r) => r.id !== resultId),
+                      }),
+                      [{ name: "progress_updated" }],
+                    )
+                  }
                   openLog={() => openSession(true)}
                   openTest={() => setTestOpen(true)}
                   sessionList={sessionList}
@@ -801,7 +864,7 @@ function App() {
                             <button
                               className="button dark full"
                               onClick={() =>
-                                update((d) => ({
+                                updateTraining((d) => ({
                                   ...d,
                                   challenges: [
                                     ...d.challenges,
@@ -826,7 +889,7 @@ function App() {
                 <DrillLibrary
                   data={data}
                   update={update}
-                  show={setDetail}
+                  show={showDrill}
                   add={addDrill}
                   schedule={scheduleDrill}
                 />
@@ -837,6 +900,7 @@ function App() {
                   update={update}
                   notify={setNotice}
                   ask={setConfirm}
+                  analytics={analytics}
                 />
               )}
               <footer className="workspace-footer">
@@ -847,8 +911,7 @@ function App() {
                   </span>
                 </span>
                 <span>
-                  <ShieldCheck size={13} /> Private by design. Stored in your
-                  browser.
+                  <ShieldCheck size={13} /> Training data stays in your browser.
                 </span>
               </footer>
             </main>
@@ -886,11 +949,29 @@ function App() {
                 update((d) => ({ ...d, schedulingDraft: draft }));
             }}
             save={(s) => {
-              update((d) => ({
-                ...d,
-                sessions: [...d.sessions.filter((x) => x.id !== s.id), s],
-                schedulingDraft: null,
-              }));
+              const previous = data.sessions.find((x) => x.id === s.id);
+              const events: AnalyticsEvent[] = [];
+              if (!previous)
+                events.push({ name: "session_created", drillId: s.drillId });
+              if (s.completed && !previous?.completed && s.drillId)
+                events.push({ name: "drill_completed", drillId: s.drillId });
+              if (
+                s.completed &&
+                (!previous?.completed ||
+                  s.date !== previous.date ||
+                  s.focus !== previous.focus ||
+                  s.actual !== previous.actual)
+              ) {
+                events.push({ name: "progress_updated" });
+              }
+              updateTraining(
+                (d) => ({
+                  ...d,
+                  sessions: [...d.sessions.filter((x) => x.id !== s.id), s],
+                  schedulingDraft: null,
+                }),
+                events,
+              );
               setSession(null);
               setNotice(
                 s.completed
@@ -905,7 +986,13 @@ function App() {
         <Modal title="Record a skill test" close={() => setTestOpen(false)}>
           <TestForm
             save={(r) => {
-              update((d) => ({ ...d, results: [...d.results, r] }));
+              updateTraining(
+                (d) => ({ ...d, results: [...d.results, r] }),
+                [
+                  { name: "skill_test_completed", test: r.test },
+                  { name: "progress_updated" },
+                ],
+              );
               setTestOpen(false);
               setNotice("Test recorded. Compare your own results over time.");
             }}
@@ -1548,14 +1635,14 @@ function Planner({
 type Ask = (c: { text: string; action: () => void }) => void;
 function ProgressPage({
   data,
-  update,
+  deleteResult,
   openLog,
   openTest,
   sessionList,
   ask,
 }: {
   data: Store;
-  update: (fn: (s: Store) => Store) => void;
+  deleteResult: (id: string) => void;
   openLog: () => void;
   openTest: () => void;
   sessionList: (s: Session[], empty?: string) => React.ReactNode;
@@ -1764,11 +1851,7 @@ function ProgressPage({
                 onClick={() =>
                   ask({
                     text: "Delete this test result? This cannot be undone.",
-                    action: () =>
-                      update((s) => ({
-                        ...s,
-                        results: s.results.filter((x) => x.id !== r.id),
-                      })),
+                    action: () => deleteResult(r.id),
                   })
                 }
               >
@@ -1810,11 +1893,13 @@ function SettingsPage({
   update,
   notify,
   ask,
+  analytics,
 }: {
   data: Store;
   update: (fn: (s: Store) => Store) => void;
   notify: (s: string) => void;
   ask: Ask;
+  analytics: ReturnType<typeof useAnalyticsConsent>;
 }) {
   const [p, setP] = useState(data.preferences);
   const input = useRef<HTMLInputElement>(null);
@@ -1971,24 +2056,20 @@ function SettingsPage({
         </section>
         <section className="card privacy-card">
           <ShieldCheck size={23} />
-          <h2>Just you and your game.</h2>
-          <p>
-            This prototype stores training data only in this browser. No
-            accounts, tracking, email collection, or external data transmission.
-            Clearing browser storage may permanently delete your data.
-          </p>
-          <p>
-            Use a nickname, and keep sensitive personal information out of
-            notes. This is a planning and practice tool, not professional
-            coaching or medical advice.
-          </p>
-          <small>First Touch Lab · Prototype / Demo</small>
+          <h2>Privacy &amp; data</h2>
+          <AnalyticsPrivacy {...analytics} />
         </section>
       </div>
     </div>
   );
 }
-function Landing({ go }: { go: (p: Page) => void }) {
+function Landing({
+  go,
+  analyticsBanner,
+}: {
+  go: (p: Page) => void;
+  analyticsBanner: React.ReactNode;
+}) {
   return (
     <div className="landing">
       <header className="landing-nav">
@@ -2003,6 +2084,7 @@ function Landing({ go }: { go: (p: Page) => void }) {
         </button>
       </header>
       <main>
+        {analyticsBanner}
         <section className="landing-hero">
           <div className="landing-copy">
             <span className="landing-kicker">
@@ -2206,7 +2288,7 @@ function Landing({ go }: { go: (p: Page) => void }) {
               ],
               [
                 "What happens to my training data?",
-                "It is stored locally in your browser, with no trackers or external data transmission. Clearing storage may delete it. Settings lets you export, import, or reset your data.",
+                "Your training data stays in your browser. Clearing storage may delete it. Settings lets you export, import, or reset it and manage optional analytics.",
               ],
               [
                 "What will I see when I start?",
@@ -2237,7 +2319,7 @@ function Landing({ go }: { go: (p: Page) => void }) {
       <footer className="landing-footer">
         <Brand onClick={() => go("Home")} />
         <p>Train with purpose. Improve every touch.</p>
-        <span>Prototype / Demo · Browser-only storage · No tracking</span>
+        <span>Prototype / Demo · Browser-only training data</span>
         <button className="text-button" onClick={() => go("Settings")}>
           Privacy & data <ArrowUpRight size={14} />
         </button>

@@ -1,6 +1,6 @@
 # First Touch Lab
 
-A functional, browser-only football training prototype. **Train with purpose. Improve every touch.** Built with React, TypeScript, Vite, Tailwind CSS, Lucide icons, and Recharts. No backend, accounts, keys, tracking, paid tools, or runtime network services.
+A functional, browser-only football training prototype. **Train with purpose. Improve every touch.** Built with React, TypeScript, Vite, Tailwind CSS, Lucide icons, and Recharts. Training data stays in the browser. The GitHub Pages site offers optional Google Analytics, with no backend, accounts, or paid services.
 
 ## View on GitHub Pages
 
@@ -51,7 +51,7 @@ npm run build
 npm run preview
 ```
 
-Open the address printed by Vite (normally http://localhost:4173). Use localhost or HTTPS: UUID generation requires a secure context. Install packages once with internet access; the running app makes no external requests. All artwork is inline SVG/CSS and typography uses system fonts.
+Open the address printed by Vite (normally http://localhost:4173). Use localhost or HTTPS: UUID generation requires a secure context. Install packages once with internet access. The local and standalone versions run without external requests. All artwork is inline SVG/CSS and typography uses system fonts.
 
 ## What works
 
@@ -73,6 +73,52 @@ Data uses schema version 2 under the existing localStorage key `first-touch-lab-
 
 No email, birth date, location, or social profile is requested. Use a nickname and avoid sensitive information in notes. Drills are general practice suggestions, not professional coaching or medical advice. Warm up, allow rest, and stop if you feel pain.
 
+## Google Analytics 4
+
+The official GitHub Pages URL uses direct `gtag.js` with Basic Consent Mode and stream `G-Y346K46JT1`. Each opted-in document sends one manual `page_view` and measures navigation to major workspace features with `feature_view`. Settings → Privacy & data lets visitors change their choice.
+
+Acceptance applies to the current document. A full reload, new tab, or page restored from the back-forward cache starts with analytics off. Old saved acceptances are ignored, so a failed withdrawal write cannot restart analytics. Starting analytics requires an explicit opt-in and successful checks of browser storage reads, writes, removal, and cross-tab messaging. A rejection is remembered across visits only when the site can read it back from storage. The consent controls report whether that save was verified.
+
+Withdrawal disables the tag, removes its frame, and clears the site's analytics cookies when the browser allows it. Storage events and a same-origin BroadcastChannel stop collection in other open tabs, including when a withdrawal write fails. If both notification paths fail at the same time, the current document and any new or reloaded document still stay off. An already active tab that cannot receive either signal can continue until it is closed or reloaded. Requests already sent or in flight cannot be recalled. Consent checks use only dedicated consent keys and never modify training records.
+
+| Event                  | Trigger                                                                                                        | Custom parameters                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `drill_view`           | A catalog drill's details open from the library or dashboard                                                   | `drill_id`, `drill_category`, `player_count`  |
+| `session_created`      | A new plan or training log is saved                                                                            | Drill fields when a catalog drill is selected |
+| `drill_completed`      | A catalog-linked session is first saved as completed                                                           | `drill_id`, `drill_category`, `player_count`  |
+| `skill_test_completed` | A valid skill test result is recorded                                                                          | `test_id`                                     |
+| `progress_updated`     | A completed log or test result is added or deleted, or a completed log's date, focus, or actual minutes change | None                                          |
+| `feature_view`         | The Dashboard, Training Planner, Progress Tracker, Challenges, Drill Library, or Settings opens                | `feature_name`                                |
+| `challenge_completed`  | A training action or challenge start crosses an active challenge's completion threshold                        | `challenge_id`                                |
+
+Player count is the catalog's total, including any goalkeeper. Test and challenge IDs are one-based catalog indexes. A feature can be counted again after navigating away and returning. Refreshing, restoring backups, resetting data, opening an unsaved form, and saving an unchanged completed log produce no training completion events. A challenge that drops below its threshold and earns completion again counts as another completion.
+
+The tag runs in a blank same-origin document, so its automatic detection runs outside the training interface. It receives a fixed site URL and page title, with referrer reporting disabled. Raw query strings, hashes, referrer URLs, click IDs, user IDs, workspace records, dates, notes, and scores are excluded from analytics. Standard GA4 measurement uses its own cookie-based browser identifier and may include device, browser, and approximate region data. Returning-user counts reflect opted-in browsers that retain these cookies.
+
+### Campaign links
+
+After analytics consent, the site checks the landing URL for these exact, case-sensitive names and values. Each field is checked independently. A missing field, a repeated parameter name, or an unapproved value leaves that field unset. Campaign labels are read from the current URL and are kept out of workspace storage and backups.
+
+| URL parameter  | Approved values                                                                         | GA4 configuration | Custom parameter on `page_view` |
+| -------------- | --------------------------------------------------------------------------------------- | ----------------- | ------------------------------- |
+| `utm_source`   | `instagram`, `facebook`, `tiktok`, `youtube`, `linkedin`, `newsletter`, `partner`, `qr` | `campaign_source` | `landing_source`                |
+| `utm_medium`   | `social`, `video`, `email`, `referral`, `offline`                                       | `campaign_medium` | `landing_medium`                |
+| `utm_campaign` | `launch`, `drill_library`, `training_planner`, `weekly_training`                        | `campaign_name`   | `landing_campaign`              |
+
+- [Instagram launch link](https://footballtraining.github.io/First-Touch-Lab/?utm_source=instagram&utm_medium=social&utm_campaign=launch)
+- [Facebook launch link](https://footballtraining.github.io/First-Touch-Lab/?utm_source=facebook&utm_medium=social&utm_campaign=launch)
+
+For other channels, use combinations such as `newsletter / email`, `youtube / video`, `partner / referral`, and `qr / offline`. Extend the fixed values in `src/analytics.ts` and document them here before publishing a link with a new label. A visit without an approved source tag cannot be identified as Instagram or Facebook by this integration. Platforms that strip UTMs also lose that attribution.
+
+### GA4 configuration before release
+
+1. In **Admin → Data streams**, open the stream for `G-Y346K46JT1` and turn off **Enhanced measurement**. Manual page views and app events already cover the intended interactions. In **Configure tag settings**, turn off automatic event detection and user-provided data collection for this tag. Keep Google signals, ads personalization, and any Google Ads or additional tag destinations disabled. [Enhanced measurement](https://support.google.com/analytics/answer/9216061) · [Google tag settings](https://support.google.com/analytics/answer/12131703)
+2. In **Reports → Acquisition → Traffic acquisition**, use the built-in **Session source / medium** and **Session campaign** dimensions to compare acquisition channels. A tagged landing during an existing session can have different labels from that session's acquisition dimensions. [Traffic-source dimensions](https://support.google.com/analytics/answer/11242870) · [GA4 configuration fields](https://developers.google.com/analytics/devguides/collection/ga4/reference/config)
+3. In **Admin → Custom definitions**, register event-scoped dimensions **Landing source** (`landing_source`), **Landing medium** (`landing_medium`), and **Landing campaign** (`landing_campaign`) for tagged page-view reporting. In an Exploration, filter **Event name** to `page_view` and use **Event count** to compare arrivals by those dimensions. Also register `feature_name`, `drill_id`, `drill_category`, `player_count`, `test_id`, and `challenge_id` for breakdowns of the training events. [Event-scoped custom dimensions](https://support.google.com/analytics/answer/14239696)
+4. After release, open each example link in a separate fresh browser profile. Check DevTools Network for zero Google requests before consent and after rejection. After acceptance, verify `page_view` and its approved landing labels in **Realtime** or **DebugView** with Tag Assistant. Try a fictional unapproved UTM value and confirm the corresponding label is absent. In Settings, withdraw consent and confirm collection stops. [DebugView](https://support.google.com/analytics/answer/7201382)
+
+The automated browser tests serve the built site at the official URL via interception and substitute a local tag fixture. They check consent, storage failures and cross-tab withdrawal, campaign filtering, outgoing event payloads, and blocked-tag behavior without sending test traffic to the GA4 property. Live GA4 delivery requires checking the deployed stream.
+
 ## Checks
 
 ```sh
@@ -89,7 +135,7 @@ npx playwright install chromium
 npm run test:e2e        # starts Vite automatically if needed
 ```
 
-For an existing Chromium installation, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to its full executable path. On Linux, Playwright may need system browser libraries (`npx playwright install --with-deps chromium`). Thirteen browser tests cover clean first visits, preservation of real data during demo cleanup, planner deletion at desktop/tablet/mobile widths, and the exact two-player selection/refresh, three-player scheduling/draft restoration, four-person goalkeeper roster/diagram/selection, solo completion/progress, removal without history loss, mobile tabs/filters and the landing page, goals and refresh, tomorrow's plan/edit/completion, totals, repeated skill tests, challenge progress, favorite drills, backup/reset/restore, corrupted storage, and navigation/layout at 320px. Screenshots and traces are generated in ignored paths. No lint command is configured; TypeScript and Prettier checks are provided.
+For an existing Chromium installation, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to its full executable path. On Linux, Playwright may need system browser libraries (`npx playwright install --with-deps chromium`). Browser tests cover clean first visits, preservation of real data during demo cleanup, planner deletion at desktop/tablet/mobile widths, and the exact two-player selection/refresh, three-player scheduling/draft restoration, four-person goalkeeper roster/diagram/selection, solo completion/progress, removal without history loss, mobile tabs/filters and the landing page, goals and refresh, tomorrow's plan/edit/completion, totals, repeated skill tests, challenge progress, favorite drills, backup/reset/restore, corrupted storage, navigation/layout at 320px, and analytics consent and event delivery. Screenshots and traces are generated in ignored paths. No lint command is configured; TypeScript and Prettier checks are provided.
 
 For manual testing: start with an empty workspace, set a goal, plan tomorrow, edit it, mark it complete with actual minutes, and check Dashboard/Progress Tracker. Record two first-touch scores, start a relevant challenge and log eligible work, save a drill, refresh, then export/reset/import a backup. Also test the mobile menu, cancel destructive prompts, and close dialogs with Escape.
 
@@ -98,6 +144,7 @@ For manual testing: start with an empty workspace, set a goal, plan tomorrow, ed
 - `src/model.ts`: types, seed data, statistics, challenge rules, backup validation.
 - `src/drills.ts`: typed 60-drill catalog with stable IDs.
 - `src/DrillFeatures.tsx`: catalog, details, diagrams, saved/current drill UI.
+- `src/analytics.ts`, `src/AnalyticsConsent.tsx`, `public/analytics.html`: Google tag, consent and privacy controls, and the separate measurement document.
 - `src/main.tsx`: app navigation, reusable UI, pages, forms, persistence.
 - `src/style.css`: responsive visual system and original pitch graphics.
 - `src/model.test.ts`, `tests/*.spec.ts`: domain, migration, catalog, regression, mobile, and standalone validation.
