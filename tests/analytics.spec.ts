@@ -6,6 +6,15 @@ import { resolve, sep } from "node:path";
 const site = "https://footballtraining.github.io/First-Touch-Lab/";
 const tagUrl = "https://www.googletagmanager.com/gtag/js?id=G-Y346K46JT1";
 const collectUrl = "https://www.google-analytics.com/g/collect";
+const consentKey = "first-touch-lab-analytics-consent-v1";
+const rejectedUnverified =
+  "Analytics is off. This browser could not verify that your rejection was saved.";
+const unavailable =
+  "Analytics is off. This browser could not verify consent controls.";
+const consentBanner = (page: Page) =>
+  page.getByRole("region", { name: "Optional analytics" });
+const acceptAnalytics = (page: Page) =>
+  consentBanner(page).getByRole("button", { name: "Accept Analytics" });
 const privateText = "private-value@example.com";
 const drill = {
   drill_id: "outfield-1-01",
@@ -138,6 +147,310 @@ test("mobile first visit and remembered rejection make no analytics requests", a
   );
   expect(frames).toEqual([]);
   expect(googleRequests).toEqual([]);
+});
+
+test("a legacy acceptance is ignored and a new opt-in expires on reload", async ({
+  context,
+  page,
+}) => {
+  const { hits, googleRequests, frames } = await servePages(context);
+  await page.goto(site);
+  await page.evaluate(
+    (key) => localStorage.setItem(key, "accepted"),
+    consentKey,
+  );
+  await page.reload();
+  await expect(acceptAnalytics(page)).toBeVisible();
+  expect(googleRequests).toEqual([]);
+  expect(frames).toEqual([]);
+
+  await acceptAnalytics(page).click();
+  await expect.poll(() => hits.map(({ name }) => name)).toEqual(["page_view"]);
+  expect(
+    await page.evaluate((key) => localStorage.getItem(key), consentKey),
+  ).toBeNull();
+  await page.reload();
+  await expect(acceptAnalytics(page)).toBeVisible();
+  await expect(page.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  expect(googleRequests.filter((url) => url === tagUrl)).toHaveLength(1);
+  expect(hits.filter(({ name }) => name === "page_view")).toHaveLength(1);
+});
+
+test("restoring a cached document requires fresh consent and keeps its analytics cookies", async ({
+  context,
+  page,
+}) => {
+  const { hits, googleRequests } = await servePages(context);
+  await page.goto(site);
+  await acceptAnalytics(page).click();
+  await expect.poll(() => hits.map(({ name }) => name)).toEqual(["page_view"]);
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new PageTransitionEvent("pagehide", { persisted: true }),
+    );
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: true }),
+    );
+  });
+  await expect(acceptAnalytics(page)).toBeVisible();
+  await expect(page.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  expect(googleRequests).toEqual([tagUrl, collectUrl]);
+  expect(
+    (await context.cookies(site)).filter(({ name }) => name.startsWith("ftl_")),
+  ).toHaveLength(2);
+});
+
+const storageFailures = [
+  ["read failure", "getItem"],
+  ["write failure", "setItem"],
+  ["removal failure", "removeItem"],
+  ["ignored write", "setItem", true],
+  ["ignored removal", "removeItem", true],
+  ["blocked storage", "blocked"],
+] as const;
+
+for (const [name, operation, ignored] of storageFailures) {
+  test(`analytics stays off on opt-in and reload with ${name}`, async ({
+    context,
+    page,
+  }) => {
+    const { googleRequests, frames } = await servePages(context);
+    await page.addInitScript(
+      ({ key, operation, ignored }) => {
+        if (window !== window.top) return;
+        localStorage.setItem(key, "accepted");
+        if (operation === "blocked") {
+          Object.defineProperty(window, "localStorage", {
+            get() {
+              throw new DOMException(
+                "Storage blocked for this test",
+                "SecurityError",
+              );
+            },
+          });
+          return;
+        }
+        const original = Storage.prototype[operation];
+        Object.defineProperty(Storage.prototype, operation, {
+          value(this: Storage, ...args: string[]) {
+            if (args[0] === key || args[0] === key + "-check") {
+              if (ignored) return;
+              throw new DOMException(
+                "Storage operation failed for this test",
+                "SecurityError",
+              );
+            }
+            return Reflect.apply(original, this, args);
+          },
+        });
+      },
+      { key: consentKey, operation, ignored },
+    );
+
+    await page.goto(site);
+    await expect(acceptAnalytics(page)).toBeVisible();
+    await acceptAnalytics(page).click();
+    await expect(consentBanner(page).getByRole("status")).toHaveText(
+      unavailable,
+    );
+    if (operation === "blocked") {
+      await consentBanner(page)
+        .getByRole("button", { name: "Reject Analytics" })
+        .click();
+      await expect(consentBanner(page).getByRole("status")).toHaveText(
+        rejectedUnverified,
+      );
+      await page
+        .getByRole("button", { name: "Start Training — Free" })
+        .first()
+        .click();
+      await expect(
+        page.getByRole("heading", { name: /Let’s put in the work/ }),
+      ).toBeVisible();
+    }
+    await page.reload();
+    await expect(acceptAnalytics(page)).toBeVisible();
+    await expect(page.locator('iframe[title="Analytics"]')).toHaveCount(0);
+    expect(googleRequests).toEqual([]);
+    expect(frames).toEqual([]);
+  });
+}
+
+test("analytics stays off without a working cross-tab channel", async ({
+  context,
+  page,
+}) => {
+  const { googleRequests, frames } = await servePages(context);
+  await page.addInitScript(() => {
+    BroadcastChannel.prototype.postMessage = () => {
+      throw new DOMException(
+        "Messaging unavailable for this test",
+        "InvalidStateError",
+      );
+    };
+  });
+  await page.goto(site);
+  await acceptAnalytics(page).click();
+  await expect(consentBanner(page).getByRole("status")).toHaveText(unavailable);
+  await consentBanner(page)
+    .getByRole("button", { name: "Reject Analytics" })
+    .click();
+  await expect(consentBanner(page)).toHaveCount(0);
+  await page.reload();
+  await expect(consentBanner(page)).toHaveCount(0);
+  expect(googleRequests).toEqual([]);
+  expect(frames).toEqual([]);
+});
+
+test("failed withdrawal writes stop both tabs and a stale grant stays off after reload", async ({
+  context,
+  page,
+}) => {
+  const { hits, googleRequests } = await servePages(context);
+  await page.goto(site);
+  await acceptAnalytics(page).click();
+  await expect
+    .poll(() => hits.filter(({ name }) => name === "page_view"))
+    .toHaveLength(1);
+  const otherTab = await context.newPage();
+  await otherTab.goto(site);
+  await expect(acceptAnalytics(otherTab)).toBeVisible();
+  await expect(otherTab.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  await acceptAnalytics(otherTab).click();
+  await expect
+    .poll(() => hits.filter(({ name }) => name === "page_view"))
+    .toHaveLength(2);
+
+  await page
+    .getByRole("button", { name: "Start Training — Free" })
+    .first()
+    .click();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByLabel("Nickname").fill("Saved player");
+  await page.getByRole("button", { name: "Save preferences" }).click();
+  const workspaceKey = "first-touch-lab-v1";
+  const before = await page.evaluate(
+    (key) => localStorage.getItem(key),
+    workspaceKey,
+  );
+  await page.evaluate((key) => {
+    localStorage.setItem(key, "accepted");
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (name, value) {
+      if (name === key)
+        throw new DOMException(
+          "Withdrawal write failed for this test",
+          "QuotaExceededError",
+        );
+      original.call(this, name, value);
+    };
+  }, consentKey);
+  await page.getByRole("button", { name: "Withdraw Consent" }).click();
+
+  for (const tab of [page, otherTab]) {
+    await expect(consentBanner(tab).getByRole("status")).toHaveText(
+      rejectedUnverified,
+    );
+    await expect(tab.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  }
+  const requestCount = googleRequests.length;
+  expect(
+    await page.evaluate((key) => localStorage.getItem(key), consentKey),
+  ).toBe("accepted");
+  for (const tab of [page, otherTab]) {
+    await tab.reload();
+    await expect(acceptAnalytics(tab)).toBeVisible();
+    await expect(tab.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  }
+  expect(googleRequests).toHaveLength(requestCount);
+  expect(
+    await page.evaluate((key) => localStorage.getItem(key), workspaceKey),
+  ).toBe(before);
+  await expect(page.getByLabel("Nickname")).toHaveValue("Saved player");
+});
+
+test("the storage event stops other tabs when messaging fails and readback is reported separately", async ({
+  context,
+  page,
+}) => {
+  const { hits, googleRequests } = await servePages(context);
+  const otherTab = await context.newPage();
+  for (const tab of [page, otherTab]) {
+    await tab.goto(site + "#Settings");
+    await acceptAnalytics(tab).click();
+  }
+  await expect
+    .poll(() => hits.filter(({ name }) => name === "page_view"))
+    .toHaveLength(2);
+  await page.evaluate((key) => {
+    BroadcastChannel.prototype.postMessage = () => {
+      throw new DOMException(
+        "Messaging stopped for this test",
+        "InvalidStateError",
+      );
+    };
+    const original = Storage.prototype.getItem;
+    Storage.prototype.getItem = function (name) {
+      if (name === key)
+        throw new DOMException(
+          "Readback failed for this test",
+          "SecurityError",
+        );
+      return original.call(this, name);
+    };
+  }, consentKey);
+  await page.getByRole("button", { name: "Withdraw Consent" }).click();
+  await expect(consentBanner(page).getByRole("status")).toHaveText(
+    rejectedUnverified,
+  );
+  await expect(
+    otherTab.getByText("Analytics rejected. Your preference is saved."),
+  ).toBeVisible();
+  for (const tab of [page, otherTab]) {
+    await expect(tab.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  }
+  const requestCount = googleRequests.length;
+  await page.reload();
+  await expect(
+    page.getByText("Analytics rejected. Your preference is saved."),
+  ).toBeVisible();
+  expect(googleRequests).toHaveLength(requestCount);
+});
+
+test("withdrawal during a pending Google tag download discards queued analytics", async ({
+  context,
+  page,
+}) => {
+  const { hits, googleRequests } = await servePages(context);
+  let releaseTag = () => {};
+  const delay = new Promise<void>((resolve) => {
+    releaseTag = resolve;
+  });
+  await context.route(
+    (url) => url.href === tagUrl,
+    async (route) => {
+      await delay;
+      await route.fallback();
+    },
+  );
+  try {
+    await page.goto(site + "#Settings");
+    await Promise.all([
+      page.waitForRequest(tagUrl),
+      acceptAnalytics(page).click(),
+    ]);
+    await page.getByRole("button", { name: "Withdraw Consent" }).click();
+  } finally {
+    releaseTag();
+  }
+  await expect(
+    page.getByText("Analytics rejected. Your preference is saved."),
+  ).toBeVisible();
+  await expect(page.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  await page.reload();
+  await expect(consentBanner(page)).toHaveCount(0);
+  expect(googleRequests).toEqual([tagUrl]);
+  expect(hits).toEqual([]);
 });
 
 const campaignCases = [
@@ -386,6 +699,9 @@ test("accepted analytics sends each expected event and withdrawal stops collecti
 
   const otherTab = await context.newPage();
   await otherTab.goto(site);
+  await expect(acceptAnalytics(otherTab)).toBeVisible();
+  await expect(otherTab.locator('iframe[title="Analytics"]')).toHaveCount(0);
+  await acceptAnalytics(otherTab).click();
   await expect
     .poll(() => hits.filter((hit) => hit.name === "page_view"))
     .toHaveLength(2);

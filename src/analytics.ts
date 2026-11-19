@@ -8,6 +8,7 @@ const cookiePath = new URL(site).pathname;
 const frameUrl = new URL("analytics.html", site);
 const cookiePrefix = "ftl";
 export const consentKey = "first-touch-lab-analytics-consent-v1";
+const consentCheckKey = `${consentKey}-check`;
 export const analyticsAvailable =
   location.href.startsWith(site) &&
   [cookiePath, `${cookiePath}index.html`].includes(location.pathname);
@@ -74,20 +75,37 @@ type TagWindow = Window & {
 let frame: HTMLIFrameElement | undefined;
 let send: ((hit: Hit) => void) | undefined;
 
-export function readConsent(): Consent {
+export function hasSavedRejection() {
   try {
-    const value = localStorage.getItem(consentKey);
-    return value === "accepted" || value === "rejected" ? value : null;
+    // Only a denial may carry over to a new document, including from v1.
+    return localStorage.getItem(consentKey) === "rejected";
   } catch {
-    return null;
+    return false;
   }
 }
 
-export function saveConsent(consent: Exclude<Consent, null>) {
+export function prepareConsentStorage() {
   try {
-    localStorage.setItem(consentKey, consent);
+    // Require an observable write and removal. A blocked browser can also
+    // silently ignore either operation. The probe never stores a grant.
+    const value = localStorage.getItem(consentCheckKey) === "0" ? "1" : "0";
+    localStorage.setItem(consentCheckKey, value);
+    if (localStorage.getItem(consentCheckKey) !== value) return false;
+    localStorage.removeItem(consentCheckKey);
+    if (localStorage.getItem(consentCheckKey) !== null) return false;
+    localStorage.removeItem(consentKey);
+    return localStorage.getItem(consentKey) === null;
   } catch {
-    // The choice still applies in this tab when browser storage is unavailable.
+    return false;
+  }
+}
+
+export function saveRejection() {
+  try {
+    localStorage.setItem(consentKey, "rejected");
+    return hasSavedRejection();
+  } catch {
+    return false;
   }
 }
 
@@ -186,16 +204,16 @@ export function startAnalytics() {
   document.body.append(iframe);
 }
 
-export function stopAnalytics() {
+export function stopAnalytics({ preserveCookies = false } = {}) {
   send = undefined;
-  if (!frame) return;
   // Disable delivery before teardown. Sending a denied update to a running tag
   // could itself produce a cookieless ping.
-  if (frame.contentDocument && frame.contentWindow) {
+  if (frame?.contentDocument && frame.contentWindow) {
     (frame.contentWindow as TagWindow)[disableFlag] = true;
   }
-  frame.remove();
+  frame?.remove();
   frame = undefined;
+  if (preserveCookies) return;
   try {
     for (const suffix of ["ga", `ga_${measurementId.slice(2)}`]) {
       document.cookie = `${cookiePrefix}_${suffix}=; Max-Age=0; Path=${cookiePath}; Secure; SameSite=Lax`;

@@ -130,8 +130,10 @@ function App() {
     lastFeature.current = feature;
   }, [analytics.consent, page]);
   const analyticsBanner =
-    analyticsAvailable && analytics.consent === null ? (
-      <AnalyticsBanner choose={analytics.choose} />
+    analyticsAvailable &&
+    (analytics.consent === null ||
+      analytics.status === "rejected-unverified") ? (
+      <AnalyticsBanner {...analytics} />
     ) : null;
   const [notice, setNotice] = useState(loadWarning);
   const [mobile, setMobile] = useState(false);

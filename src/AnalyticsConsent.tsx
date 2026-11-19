@@ -1,54 +1,132 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   analyticsAvailable,
   consentKey,
-  readConsent,
-  saveConsent,
+  hasSavedRejection,
+  prepareConsentStorage,
+  saveRejection,
   startAnalytics,
   stopAnalytics,
 } from "./analytics";
 import type { Consent } from "./analytics";
 
 type ChooseConsent = (choice: Exclude<Consent, null>) => void;
+const statusText = {
+  undecided: "Analytics is off until you accept.",
+  accepted: "Analytics allowed for this page only.",
+  "rejected-saved": "Analytics rejected. Your preference is saved.",
+  "rejected-unverified":
+    "Analytics is off. This browser could not verify that your rejection was saved.",
+  unavailable:
+    "Analytics is off. This browser could not verify consent controls.",
+};
+type ConsentStatus = keyof typeof statusText;
+
+function initialStatus(): ConsentStatus {
+  return analyticsAvailable && hasSavedRejection()
+    ? "rejected-saved"
+    : "undecided";
+}
+
+function notifyTabs(
+  channel: BroadcastChannel | null,
+  message: "check" | "withdraw",
+) {
+  try {
+    if (!channel) return false;
+    channel.postMessage(message);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function useAnalyticsConsent() {
-  const [consent, setConsent] = useState<Consent>(() =>
-    analyticsAvailable ? readConsent() : null,
-  );
+  const [status, setStatus] = useState(initialStatus);
+  const channel = useRef<BroadcastChannel | null>(null);
   useEffect(() => {
     if (!analyticsAvailable) return;
-    function sync() {
-      const saved = readConsent();
-      if (saved !== "accepted") stopAnalytics();
-      setConsent(saved);
+    let notifications: BroadcastChannel | null = null;
+    try {
+      notifications = new BroadcastChannel(consentKey);
+    } catch {
+      // The visitor can still reject analytics without an open channel.
+    }
+    channel.current = notifications;
+    function applyWithdrawal() {
+      stopAnalytics();
+      setStatus(hasSavedRejection() ? "rejected-saved" : "rejected-unverified");
+    }
+    function onMessage(event: MessageEvent) {
+      if (event.data === "withdraw") applyWithdrawal();
     }
     function onStorage(event: StorageEvent) {
-      if (
-        event.storageArea === localStorage &&
-        (event.key === consentKey || event.key === null)
-      )
-        sync();
+      if (event.key !== consentKey && event.key !== null) return;
+      try {
+        if (event.storageArea !== localStorage) return;
+      } catch {
+        applyWithdrawal();
+        return;
+      }
+      if (event.newValue === "rejected") {
+        applyWithdrawal();
+      } else if (event.key === null) {
+        stopAnalytics();
+        setStatus(initialStatus());
+      } else if (event.newValue === null) {
+        setStatus((current) =>
+          current === "rejected-saved" ? initialStatus() : current,
+        );
+      }
+    }
+    function onPageHide(event: PageTransitionEvent) {
+      if (event.persisted) stopAnalytics({ preserveCookies: true });
     }
     function onPageShow(event: PageTransitionEvent) {
-      if (event.persisted) sync();
+      if (event.persisted) {
+        stopAnalytics({ preserveCookies: true });
+        setStatus(initialStatus());
+      }
     }
+    notifications?.addEventListener("message", onMessage);
     window.addEventListener("storage", onStorage);
+    window.addEventListener("pagehide", onPageHide);
     window.addEventListener("pageshow", onPageShow);
     return () => {
+      notifications?.close();
+      channel.current = null;
       window.removeEventListener("storage", onStorage);
+      window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);
     };
   }, []);
-  useEffect(() => {
-    if (consent === "accepted") startAnalytics();
-  }, [consent]);
   function choose(choice: Exclude<Consent, null>) {
-    if (choice === "rejected") stopAnalytics();
-    saveConsent(choice);
-    setConsent(choice);
+    if (choice === "rejected") {
+      stopAnalytics();
+      const saved = saveRejection();
+      notifyTabs(channel.current, "withdraw");
+      setStatus(saved ? "rejected-saved" : "rejected-unverified");
+    } else if (
+      notifyTabs(channel.current, "check") &&
+      prepareConsentStorage()
+    ) {
+      startAnalytics();
+      setStatus("accepted");
+    } else {
+      stopAnalytics();
+      setStatus("unavailable");
+    }
   }
-  return { consent, choose };
+  const consent: Consent =
+    status === "accepted"
+      ? "accepted"
+      : status === "rejected-saved" || status === "rejected-unverified"
+        ? "rejected"
+        : null;
+  return { consent, status, choose };
 }
+
+type ConsentControls = ReturnType<typeof useAnalyticsConsent>;
 
 function Choices({
   consent,
@@ -79,7 +157,7 @@ function Choices({
   );
 }
 
-export function AnalyticsBanner({ choose }: { choose: ChooseConsent }) {
+export function AnalyticsBanner({ consent, status, choose }: ConsentControls) {
   return (
     <section
       className="analytics-banner"
@@ -88,23 +166,18 @@ export function AnalyticsBanner({ choose }: { choose: ChooseConsent }) {
       <div>
         <h2 id="analytics-banner-title">Optional analytics</h2>
         <p>
-          Allow Google Analytics to measure visits and use of the training
-          tools? You can change your choice in Settings under Privacy &amp;
-          data.
+          Allow Google Analytics on this page to measure visits and use of the
+          training tools? You can change your choice in Settings under Privacy
+          &amp; data.
         </p>
+        {status !== "undecided" && <p role="status">{statusText[status]}</p>}
       </div>
-      <Choices consent={null} choose={choose} />
+      <Choices consent={consent} choose={choose} />
     </section>
   );
 }
 
-export function AnalyticsPrivacy({
-  consent,
-  choose,
-}: {
-  consent: Consent;
-  choose: ChooseConsent;
-}) {
+export function AnalyticsPrivacy({ consent, status, choose }: ConsentControls) {
   return (
     <>
       <p>
@@ -122,9 +195,10 @@ export function AnalyticsPrivacy({
         returning browsers. Advertising and remarketing are disabled.
       </p>
       <p>
-        This browser remembers your choice separately from your training data.
-        You can change it here at any time. Withdrawal stops future measurement
-        in this browser and removes this site's analytics cookies. See{" "}
+        Acceptance applies to this page only. The site saves a rejection in this
+        browser when it can verify the save. You can change your choice here at
+        any time. Withdrawal stops measurement and removes this site's analytics
+        cookies when your browser allows it. See{" "}
         <a
           href="https://policies.google.com/technologies/partner-sites"
           rel="noreferrer"
@@ -135,14 +209,7 @@ export function AnalyticsPrivacy({
       </p>
       {analyticsAvailable ? (
         <>
-          <p aria-live="polite">
-            {consent === "accepted"
-              ? "Analytics allowed"
-              : consent === "rejected"
-                ? "Analytics rejected"
-                : "Analytics off until you accept"}
-            .
-          </p>
+          <p aria-live="polite">{statusText[status]}</p>
           <Choices consent={consent} choose={choose} />
         </>
       ) : (
